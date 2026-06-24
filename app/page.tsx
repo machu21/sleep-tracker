@@ -100,9 +100,9 @@ function CustomTooltip({ active, payload, label }: any) {
 function statusMeta(status: string) {
   const s = status.toUpperCase();
   if (s === 'SLEEPING') return { color: '#818CF8', bg: '#1E1B4B', label: 'Sleeping' };
-  if (s === 'AWAKE')    return { color: '#34D399', bg: '#064E3B', label: 'Awake' };
-  if (s === 'EMPTY')    return { color: '#F59E0B', bg: '#451A03', label: 'Bed empty' };
-  return                       { color: '#6B7280', bg: '#1F2937', label: status };
+  if (s === 'AWAKE') return { color: '#34D399', bg: '#064E3B', label: 'Awake' };
+  if (s === 'EMPTY') return { color: '#F59E0B', bg: '#451A03', label: 'Bed empty' };
+  return { color: '#6B7280', bg: '#1F2937', label: status };
 }
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
@@ -115,6 +115,7 @@ export default function Dashboard() {
   const tableRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // 1. Initial history fetch
     const fetchData = async () => {
       const { data } = await supabase
         .from('sleep_logs')
@@ -124,12 +125,18 @@ export default function Dashboard() {
     };
     fetchData();
 
-    const channel = supabase
-      .channel('realtime-sleep')
+    // 2. Setup Channel
+    const channel = supabase.channel('live-status');
+
+    // Listener for Realtime Broadcast (Live Status)
+    channel
+      .on('broadcast', { event: 'status-update' }, (payload) => {
+        setLiveStatus(payload.payload.status);
+      })
+      // Listener for Database Insert (History Table)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sleep_logs' },
         (payload) => {
           setLogs((prev) => [...prev, payload.new as SleepLog]);
-          setLiveStatus(payload.new.status ?? '—');
         })
       .subscribe();
 
@@ -140,11 +147,11 @@ export default function Dashboard() {
     if (!formData.sleep_time || !formData.wake_time) return;
     setIsLoading(true);
     const sleepDate = new Date(formData.sleep_time);
-    const wakeDate  = new Date(formData.wake_time);
+    const wakeDate = new Date(formData.wake_time);
     const durationInHours = ((wakeDate.getTime() - sleepDate.getTime()) / 3_600_000).toFixed(1);
     const { error } = await supabase.from('sleep_logs').insert([{
       sleep_time: sleepDate.toISOString(),
-      wake_time:  wakeDate.toISOString(),
+      wake_time: wakeDate.toISOString(),
       duration_hours: durationInHours,
       created_at: sleepDate.toISOString(),
     }]);
@@ -203,7 +210,7 @@ export default function Dashboard() {
         <div style={{ width: '100%', maxWidth: 1700, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 60 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#818CF8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
+              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
             </svg>
             <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.01em', color: '#F9FAFB' }}>Sleep Tracker</span>
           </div>
@@ -293,7 +300,7 @@ export default function Dashboard() {
               <AreaChart data={logs} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
                 <defs>
                   <linearGradient id="sleepGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="#3B82F6" stopOpacity={0.25} />
+                    <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.25} />
                     <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
                   </linearGradient>
                 </defs>
@@ -410,7 +417,7 @@ export default function Dashboard() {
 
             {[
               { key: 'sleep_time', label: 'Bedtime' },
-              { key: 'wake_time',  label: 'Wake-up time' }
+              { key: 'wake_time', label: 'Wake-up time' }
             ].map(({ key, label }) => (
               <div key={key} style={{ marginBottom: 16 }}>
                 <label style={{ display: 'block', color: '#6B7280', fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>

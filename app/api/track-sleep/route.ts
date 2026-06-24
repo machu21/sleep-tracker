@@ -10,20 +10,23 @@ const supabase = createClient(
 
 export async function POST(request: Request) {
   try {
-    const { status } = await request.json();
+    const { status, sleep_start_time } = await request.json(); 
 
-    if (!status) {
-      return NextResponse.json({ error: 'Missing status' }, { status: 400 });
+    if (status === 'AWAKE' && sleep_start_time) {
+      // Logic: Only insert into history when user wakes up
+      const sleepDate = new Date(sleep_start_time);
+      const wakeDate = new Date();
+      const duration = ((wakeDate.getTime() - sleepDate.getTime()) / 3_600_000).toFixed(1);
+
+      await supabase.from('sleep_logs').insert([{
+        sleep_time: sleep_start_time,
+        wake_time: wakeDate.toISOString(),
+        duration_hours: duration,
+        created_at: wakeDate.toISOString()
+      }]);
     }
 
-    // Insert into Supabase
-    const { data, error } = await supabase
-      .from('sleep_logs')
-      .insert([{ status }]);
-
-    if (error) throw error;
-
-    return NextResponse.json({ message: 'Success', data }, { status: 200 });
+    return NextResponse.json({ message: 'Live status updated/History logged' });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

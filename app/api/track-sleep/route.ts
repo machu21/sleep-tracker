@@ -10,42 +10,76 @@ const supabase = createClient(
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { status, sleep_start_time } = body;
+
+    // ESP32 sends one of two payload shapes:
+    //
+    //  A) Simple status update:
+    //     { "status": "SLEEPING" }
+    //     { "status": "EMPTY" }
+    //     { "status": "AWAKE" }           ← plain AWAKE with no session data
+    //
+    //  B) Wake-up event with session data:
+    //     { "status": "AWAKE", "sleep_start_millis": 123456, "sleep_duration_s": 3720 }
+
+    const { status, sleep_start_millis, sleep_duration_s } = body;
 
     if (!status) {
       return NextResponse.json({ error: 'Missing status' }, { status: 400 });
     }
 
-    // 1. Always Broadcast for the Live UI
+    // ── 1. Always broadcast for the live dashboard UI ──────────────────────
     await supabase.channel('live-status').send({
       type: 'broadcast',
       event: 'status-update',
       payload: { status },
     });
 
-    // 2. Log to Database only when waking up
-    if (status === 'AWAKE' && sleep_start_time) {
-      const now = new Date();
-      
-      // Calculate duration: 
-      // If ESP32 sends millis since boot, we assume current time is (now - sleep_start_time_ms)
-      // Note: This assumes sleep_start_time is a Unix timestamp (ms) or logic-calculated start
-      const durationMs = parseInt(sleep_start_time); 
-      const durationHours = (durationMs / 3_600_000).toFixed(1);
+    // ── 2. Log a sleep session only when waking up WITH session data ───────
+    //    Plain AWAKE pings (no sleep_duration_s) are ignored for logging —
+    //    they only update the live status above.
+    if (status === 'AWAKE' && sleep_duration_s !== undefined) {
+      const durationSec = parseInt(String(sleep_duration_s), 10);
+
+      if (isNaN(durationSec) || durationSec <= 0) {
+        return NextResponse.json(
+          { error: 'Invalid sleep_duration_s' },
+          { status: 400 }
+        );
+      }
+
+      const wakeTime  = new Date();
+      const sleepTime = new Date(wakeTime.getTime() - durationSec * 1000);
+      const durationHours = (durationSec / 3600).toFixed(1);
+
+      console.log(`[track-sleep] Logging session:
+        sleep_time:     ${sleepTime.toISOString()}
+        wake_time:      ${wakeTime.toISOString()}
+        duration_hours: ${durationHours}
+        raw_duration_s: ${durationSec}`);
 
       const { error } = await supabase.from('sleep_logs').insert([{
-        sleep_time: new Date(now.getTime() - durationMs).toISOString(),
-        wake_time: now.toISOString(),
+        sleep_time:     sleepTime.toISOString(),
+        wake_time:      wakeTime.toISOString(),
         duration_hours: durationHours,
-        created_at: now.toISOString()
+        created_at:     sleepTime.toISOString(), // row date = when sleep started
       }]);
 
       if (error) throw error;
+
+      return NextResponse.json({
+        message: 'Session logged',
+        sleep_time: sleepTime.toISOString(),
+        wake_time:  wakeTime.toISOString(),
+        duration_hours: durationHours,
+      }, { status: 200 });
     }
 
-    return NextResponse.json({ message: 'Broadcasted and/or Logged' }, { status: 200 });
+    // ── 3. All other statuses (SLEEPING, EMPTY, plain AWAKE) ───────────────
+    //    Broadcast-only, no DB write needed.
+    return NextResponse.json({ message: 'Status broadcasted' }, { status: 200 });
+
   } catch (error: any) {
-    console.error('API Error:', error);
+    console.error('[track-sleep] API Error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
